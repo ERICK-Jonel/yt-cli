@@ -1,0 +1,21 @@
+# Caché y compilados de Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Entornos virtuales locales
+venv/
+env/
+.venv/
+
+# Archivos de logs y temporales de la app
+/tmp/yt-cli.log
+*.log
+
+# Archivos del sistema operativo y editores
+.DS_Store
+.vscode/
+.idea/

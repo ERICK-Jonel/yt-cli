@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yt-cli-minimal"
+version = "1.0.0"
+description = "Buscador y reproductor minimalista de YouTube por Terminal"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "yt-dlp",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+]
+
+[project.scripts]
+yt-cli = "yt_cli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["yt_cli*"]
