@@ -2,8 +2,8 @@
 """
 yt-cli - Buscador y Reproductor Minimalista de YouTube por Terminal
 ====================================================================
-Versión refactorizada con arquitectura modular, tipado estático,
-evaluación perezosa (streams) y controles avanzados en FZF.
+Versión estable: columnas en orden lineal (Duración | Canal | Título),
+puntero limpio, símbolos musicales y reproductor robusto sin fallos de índice.
 """
 
 import subprocess
@@ -11,24 +11,26 @@ import json
 import sys
 import os
 import logging
-from typing import List, Dict, Optional, Tuple, Iterator
+import threading
+import itertools
+import time
+from typing import List, Dict, Tuple, Iterator
 
 # ==========================================
 # MÓDULO 1: CONFIGURACIÓN Y UTILIDADES
 # ==========================================
 class Config:
-    """Almacena constantes y configuraciones globales del sistema."""
     LOG_FILE: str = "/tmp/yt-cli.log"
     
-    # Códigos de color ANSI
-    RESET: str  = "\033[0m"
-    CYAN: str   = "\033[96m"
-    GREEN: str  = "\033[92m"
-    YELLOW: str = "\033[93m"
-    DIM: str    = "\033[2m"
+    RESET: str   = "\033[0m"
+    BOLD: str    = "\033[1m"
+    CYAN: str    = "\033[96m"
+    GREEN: str   = "\033[92m"
+    YELLOW: str  = "\033[93m"
+    MAGENTA: str = "\033[95m"
+    DIM: str     = "\033[2m"
 
 class LoggerSetup:
-    """Maneja la inicialización del registro de eventos (Logs)."""
     @staticmethod
     def init() -> None:
         logging.basicConfig(
@@ -38,30 +40,45 @@ class LoggerSetup:
         )
 
 class Utils:
-    """Funciones puras de utilidad general."""
     @staticmethod
     def format_time(duration: any) -> str:
-        """Convierte segundos crudos al formato estándar MM:SS o HH:MM:SS."""
         if isinstance(duration, (int, float)):
             m, s = divmod(int(duration), 60)
             h, m = divmod(m, 60)
             return f"{h}:{m:02d}:{s:02d}" if h > 0 else f"{m}:{s:02d}"
         return str(duration) if duration else "0:00"
 
-#i ==========================================
+class Spinner:
+    def __init__(self, message: str = "Cargando..."):
+        self.spinner = itertools.cycle(['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'])
+        self.message = message
+        self.stop_running = threading.Event()
+        self.thread = threading.Thread(target=self._spin)
+
+    def _spin(self):
+        while not self.stop_running.is_set():
+            sys.stdout.write(f"\r{Config.CYAN}{next(self.spinner)} {Config.BOLD}{self.message}{Config.RESET}")
+            sys.stdout.flush()
+            time.sleep(0.1)
+        sys.stdout.write('\r' + ' ' * (len(self.message) + 10) + '\r')
+        sys.stdout.flush()
+
+    def start(self): self.thread.start()
+    def stop(self):
+        self.stop_running.set()
+        self.thread.join()
+
+# ==========================================
 # MÓDULO 2: RED Y EXTRACCIÓN (YT-DLP)
 # ==========================================
 class YouTubeNetwork:
-    """Encapsula toda la lógica de conexión y extracción de metadatos de YouTube."""
-    
     @staticmethod
     def search(query: str, limit: int = 40) -> List[Dict[str, str]]:
-        """
-        Ejecuta la búsqueda en yt-dlp y retorna los resultados parseados.
-        Utiliza evaluación perezosa en el parseo JSON.
-        """
         logging.info(f"Iniciando búsqueda para: {query}")
-        print(f"{Config.CYAN}>> Buscando '{query}' en YouTube...{Config.RESET}")
+        os.system('clear')
+        
+        loader = Spinner(f"Buscando '{query}' en YouTube...")
+        loader.start()
         
         cmd = [
             "yt-dlp",
@@ -77,11 +94,13 @@ class YouTubeNetwork:
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             logging.info("Extracción de red finalizada.")
         except Exception as e:
+            loader.stop()
             logging.critical(f"Fallo crítico en yt-dlp: {e}")
-            print(f"{Config.YELLOW}Error al conectar. Revisa {Config.LOG_FILE}.{Config.RESET}")
+            print(f"\n{Config.YELLOW}Error al conectar. Revisa {Config.LOG_FILE}.{Config.RESET}")
             sys.exit(1)
+        finally:
+            loader.stop()
 
-        # Generador interno para evaluación perezosa del volcado JSON
         def _parse_lines(lines: List[str]) -> Iterator[Dict[str, str]]:
             for line in lines:
                 if not line.strip(): continue
@@ -89,8 +108,8 @@ class YouTubeNetwork:
                     data = json.loads(line)
                     raw_duration = data.get("duration_string") or data.get("duration")
                     yield {
-                        "title": data.get("title", "Desconocido")[:55], 
-                        "uploader": data.get("uploader", data.get("channel", "Desconocido"))[:15],
+                        "title": data.get("title", "Desconocido"), 
+                        "uploader": data.get("uploader", data.get("channel", "Desconocido")),
                         "duration": Utils.format_time(raw_duration),
                         "url": data.get("url", data.get("webpage_url", ""))
                     }
@@ -103,27 +122,24 @@ class YouTubeNetwork:
 # MÓDULO 3: REPRODUCTOR MULTIMEDIA (MPV)
 # ==========================================
 class Player:
-    """Controlador para el subsistema de reproducción MPV."""
-    
     @staticmethod
     def play(video_data: Dict[str, str], audio_only: bool = False) -> None:
-        """
-        Lanza MPV en primer plano con soporte de cookies del navegador
-        para evitar el bloqueo anti-bot de YouTube.
-        """
         os.system('clear')
-        mode_text = "SÓLO AUDIO" if audio_only else "VIDEO"
+        mode_text = "♫ SÓLO AUDIO" if audio_only else "🎬 VIDEO"
+        color = Config.MAGENTA if audio_only else Config.CYAN
         
-        print(f"{Config.GREEN}>> Reproduciendo ({mode_text}):{Config.RESET} {video_data['title']}")
-        print(f"{Config.DIM}Enlace: {video_data['url']}{Config.RESET}\n")
+        print(f"\n{color}{Config.BOLD}======================================================================{Config.RESET}")
+        print(f"{color}{Config.BOLD} ♫ REPRODUCIENDO ({mode_text}){Config.RESET}")
+        print(f"{color}{Config.BOLD}======================================================================{Config.RESET}")
+        print(f" {Config.CYAN}♪ Título  :{Config.RESET} {video_data['title']}")
+        print(f" {Config.YELLOW}👤 Canal   :{Config.RESET} {video_data['uploader']}")
+        print(f" {Config.DIM}⏱ Duración:{Config.RESET} {video_data['duration']}\n")
         
-        cmd = ["mpv", video_data['url']]
+        print(f" {Config.GREEN}[ Estado ]{Config.RESET} Reproduciendo contenido (mpv)...")
+        print(f" {Config.DIM}Controles: [Espacio] Pausa | [9/0] Volumen | [q] Cerrar{Config.RESET}")
+        print(f"{color}{Config.BOLD}======================================================================{Config.RESET}\n")
         
-        # Inyectamos las cookies de Firefox de forma nativa para saltar el bloqueo anti-bot
-        cmd.extend([
-            "--ytdl-raw-options=cookies-from-browser=firefox"
-        ])
-        
+        cmd = ["mpv", video_data['url'], "--ytdl-raw-options=cookies-from-browser=firefox"]
         if audio_only:
             cmd.append("--no-video")
             
@@ -138,50 +154,45 @@ class Player:
 # MÓDULO 4: INTERFAZ DE USUARIO (FZF)
 # ==========================================
 class UI:
-    """Maneja la vista y la interacción del usuario mediante TUI y atajos."""
-    
     @staticmethod
     def show_help() -> None:
-        """Despliega la ayuda estructurada en pantalla."""
         os.system('clear')
-        print(f"{Config.CYAN}=== yt-cli : Manual de Usuario ==={Config.RESET}\n")
-        
+        print(f"{Config.CYAN}{Config.BOLD}=== ♫ yt-cli : Manual de Usuario ==={Config.RESET}\n")
         print(f"{Config.YELLOW}Navegación en la Lista (FZF):{Config.RESET}")
-        print(" [Enter]   : Reproducir en formato NORMAL (Video + Audio)")
-        print(" [Ctrl+A]  : Reproducir en formato SÓLO AUDIO (Ahorra CPU/RAM)")
-        print(" [Ctrl+N]  : Realizar una NUEVA BÚSQUEDA")
-        print(" [Ctrl+H]  : Mostrar esta ayuda")
-        print(" [Esc]     : Salir del programa\n")
-        
-        print(f"{Config.YELLOW}Controles de MPV (Durante reproducción):{Config.RESET}")
-        print(" [9] / [0] : Bajar / Subir volumen")
-        print(" [m]       : Silenciar (Mute)")
-        print(" [Espacio] : Pausar / Reanudar")
-        print(" [f]       : Pantalla completa (Fullscreen)")
-        print(" [q]       : Cerrar video y volver a la lista")
-        
-        input(f"\n{Config.DIM}Presiona Enter para continuar...{Config.RESET}")
+        print(f" {Config.BOLD}[Escribir]{Config.RESET} : Filtrar resultados en tiempo real")
+        print(f" {Config.BOLD}[Enter]{Config.RESET}    : Reproducir en formato NORMAL (Video + Audio)")
+        print(f" {Config.BOLD}[Ctrl+A]{Config.RESET}   : Reproducir en formato SÓLO AUDIO")
+        print(f" {Config.BOLD}[Ctrl+N]{Config.RESET}   : Realizar una NUEVA BÚSQUEDA")
+        print(f" {Config.BOLD}[Ctrl+H]{Config.RESET}   : Mostrar esta ayuda")
+        print(f" {Config.BOLD}[Esc]{Config.RESET}      : Salir del programa\n")
+        input(f"{Config.DIM}Presiona Enter para continuar...{Config.RESET}")
 
     @staticmethod
     def prompt_fzf(videos: List[Dict[str, str]]) -> Tuple[str, str]:
-        """
-        Genera el menú interactivo FZF utilizando un stream I/O no bloqueante.
-        Retorna la tecla presionada (Expect Key) y el índice seleccionado.
-        """
         fzf_cmd = [
             "fzf", 
-            "--prompt=Seleccionar > ", 
+            "--prompt=🔎 Filtrar > ", 
             "--ansi", 
             "--delimiter", r"\|\|", 
-            "--with-nth", "2..",
+            "--with-nth", "2",          # Muestra exactamente la columna visual y mantiene el índice oculto intacto
             "--layout=reverse", 
-            "--border",
+            "--border=rounded",       
+            "--info=inline",          
+            "--pointer=>",            
             "--expect=ctrl-a,ctrl-n,ctrl-h" 
         ]
 
         def _generate_lines() -> Iterator[str]:
             for i, v in enumerate(videos):
-                yield f"{i}||{v['title']:<58} {Config.DIM}|{Config.RESET} {Config.GREEN}{v['duration']:<6}{Config.RESET} {Config.DIM}|{Config.RESET} {Config.YELLOW}{v['uploader']:<15}{Config.RESET}"
+                # Orden lineal perfecto: Duración | Canal | Título
+                duration = f"{Config.GREEN}{v['duration']:>7}{Config.RESET}"
+                uploader = f"{Config.YELLOW}{v['uploader'][:18]:<18}{Config.RESET}"
+                title = f"{v['title'][:48]:<48}"
+                
+                visual = f"{duration} {Config.DIM}│{Config.RESET} {uploader} {Config.DIM}│{Config.RESET} {title}"
+                
+                # Estructura limpia: [0: ID] || [1: Visual]
+                yield f"{i}||{visual}"
 
         os.system('clear')
         logging.info("Lanzando instancia interactiva de FZF.")
@@ -202,7 +213,7 @@ class UI:
         return key_pressed, selected_line
 
 # ==========================================
-# PUNTO DE ENTRADA PRINCIPAL (MAIN LOOP)
+# PUNTO DE ENTRADA PRINCIPAL
 # ==========================================
 def main() -> None:
     LoggerSetup.init()
@@ -213,8 +224,10 @@ def main() -> None:
 
     try:
         logging.info("--- Iniciando ciclo de vida yt-cli ---")
+        os.system('clear')
         
         if len(sys.argv) < 2:
+            print(f"{Config.CYAN}{Config.BOLD}yt-cli ♫ Minimal{Config.RESET}")
             query = input(f"{Config.YELLOW}¿Qué deseas buscar?: {Config.RESET}")
             if not query.strip(): sys.exit(0)
         else:
@@ -232,7 +245,7 @@ def main() -> None:
                 key, selected_line = UI.prompt_fzf(videos)
                 
                 if not key and not selected_line:
-                    print(f"{Config.DIM}Saliendo de yt-cli...{Config.RESET}")
+                    os.system('clear')
                     sys.exit(0)
                 
                 if key == "ctrl-h":
@@ -251,7 +264,6 @@ def main() -> None:
                     try:
                         selected_index = int(selected_line.split("||")[0])
                         chosen_video = videos[selected_index]
-                        
                         is_audio_only = (key == "ctrl-a")
                         
                         Player.play(chosen_video, audio_only=is_audio_only)
@@ -261,7 +273,7 @@ def main() -> None:
                         continue
 
     except KeyboardInterrupt:
-        print(f"\n{Config.DIM}Interrupción manual (Ctrl+C). Saliendo...{Config.RESET}")
+        os.system('clear')
         sys.exit(0)
     except Exception as e:
         logging.critical(f"Excepción general no capturada: {e}")
