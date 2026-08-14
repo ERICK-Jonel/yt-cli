@@ -1,3 +1,7 @@
+"""
+yt-cli - Módulo de Configuración y Constantes
+"""
+
 import sys
 import time
 import subprocess
@@ -38,9 +42,10 @@ class Utils:
         clipboard_cmds = [["xclip", "-selection", "clipboard"], ["wl-copy"]]
         for cmd in clipboard_cmds:
             try:
-                p = subprocess.Popen(cmd, stdin=subprocess.PIPE, text=True)
-                p.communicate(input=text)
-                if p.returncode == 0: return True
+                with subprocess.Popen(cmd, stdin=subprocess.PIPE, text=True) as p:
+                    p.communicate(input=text)
+                    if p.returncode == 0: 
+                        return True
             except FileNotFoundError:
                 continue
         return False
@@ -50,7 +55,7 @@ class Spinner:
         self.spinner = itertools.cycle(['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'])
         self.message = message
         self.stop_running = threading.Event()
-        self.thread = threading.Thread(target=self._spin)
+        self.thread = threading.Thread(target=self._spin, daemon=True)
 
     def _spin(self):
         while not self.stop_running.is_set():
@@ -60,7 +65,9 @@ class Spinner:
         sys.stdout.write('\r' + ' ' * (len(self.message) + 10) + '\r')
         sys.stdout.flush()
 
-    def start(self): self.thread.start()
+    def start(self): 
+        self.thread.start()
+        
     def stop(self):
         self.stop_running.set()
         self.thread.join()
